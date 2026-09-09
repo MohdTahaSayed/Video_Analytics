@@ -3,95 +3,117 @@ import numpy as np
 
 def fit_polynomial(points):
     """
-    Fit a second-order polynomial:
-
-        x(y) = ay^2 + by + c
-
-    We use x as a function of y because lane boundaries are
-    approximately one x-position for each image row.
+    Fit a 2nd degree polynomial to a set of (x, y) points.
+    
+    Args:
+        points: List of (x, y) points
+        
+    Returns:
+        numpy array of polynomial coefficients [a, b, c] where x = a*y^2 + b*y + c
+        or None if insufficient points
     """
-
-    if points is None or len(points) < 6:
+    if not points or len(points) < 50:
         return None
-
-    points = np.asarray(points, dtype=np.float64)
-
+    
+    points = np.array(points)
+    
+    # Extract x and y coordinates
     x = points[:, 0]
     y = points[:, 1]
-
-    # Center y values to improve numerical conditioning.
-    y_mean = np.mean(y)
-    y_normalized = y - y_mean
-
-    A = np.column_stack([
-        y_normalized ** 2,
-        y_normalized,
-        np.ones_like(y_normalized)
-    ])
-
+    
     try:
-        coefficients, _, _, _ = np.linalg.lstsq(
-            A,
-            x,
-            rcond=None
-        )
+        # Fit polynomial: x = a*y^2 + b*y + c
+        coefficients = np.polyfit(y, x, 2)
+        return coefficients
     except np.linalg.LinAlgError:
         return None
 
-    return {
-        "coefficients": coefficients,
-        "y_mean": y_mean
-    }
 
-
-def evaluate_polynomial(model, y):
+def evaluate_polynomial(model, y_values):
     """
-    Evaluate the fitted x(y) polynomial.
+    Evaluate a polynomial model at given y values.
+    
+    Args:
+        model: Either a numpy array of coefficients [a, b, c] or a dictionary
+               with a 'coefficients' key containing the array
+        y_values: Array of y values to evaluate at
+        
+    Returns:
+        Array of x values, or None if model is None
     """
-
     if model is None:
         return None
+    
+    # Handle both dictionary and array formats
+    if isinstance(model, dict):
+        coefficients = model.get("coefficients")
+        if coefficients is None:
+            return None
+    else:
+        # Assume it's already a numpy array or list of coefficients
+        coefficients = model
+    
+    # Convert to numpy array if needed
+    coefficients = np.asarray(coefficients)
+    
+    # Evaluate polynomial at y_values
+    return np.polyval(coefficients, y_values)
 
-    coefficients = model["coefficients"]
-    y_mean = model["y_mean"]
 
-    y_normalized = np.asarray(y) - y_mean
-
-    a, b, c = coefficients
-
-    return (
-        a * y_normalized ** 2
-        + b * y_normalized
-        + c
-    )
-
-
-def lane_center(left_x, right_x):
+def get_lane_width(left_model, right_model, y_eval):
     """
-    Center of the detected lane at a particular y.
+    Calculate lane width at a specific y position.
+    
+    Args:
+        left_model: Left lane polynomial model
+        right_model: Right lane polynomial model
+        y_eval: y position to evaluate at
+        
+    Returns:
+        Lane width in pixels, or None if either model is None
     """
-
-    return (left_x + right_x) / 2.0
-
-
-def normalized_lane_position(
-    ego_x,
-    left_x,
-    right_x
-):
-    """
-    Normalized ego position:
-
-        0 -> left lane boundary
-        0.5 -> lane center
-        1 -> right lane boundary
-    """
-
-    lane_width = right_x - left_x
-
-    if lane_width <= 0:
+    if left_model is None or right_model is None:
         return None
+    
+    left_x = evaluate_polynomial(left_model, y_eval)
+    right_x = evaluate_polynomial(right_model, y_eval)
+    
+    if left_x is None or right_x is None:
+        return None
+    
+    return float(right_x - left_x)
 
-    return (
-        ego_x - left_x
-    ) / lane_width
+
+def validate_polynomial(model):
+    """
+    Validate a polynomial model.
+    
+    Args:
+        model: Polynomial coefficients [a, b, c]
+        
+    Returns:
+        True if valid, False otherwise
+    """
+    if model is None:
+        return False
+    
+    # Check if coefficients are reasonable
+    if isinstance(model, dict):
+        coeffs = model.get("coefficients")
+        if coeffs is None:
+            return False
+    else:
+        coeffs = model
+    
+    coeffs = np.asarray(coeffs)
+    
+    # Check for NaN or inf
+    if not np.isfinite(coeffs).all():
+        return False
+    
+    # Check curvature isn't too extreme
+    if len(coeffs) >= 3:
+        if abs(coeffs[0]) > 0.01:  # Quadratic coefficient
+            return False
+    
+    return True

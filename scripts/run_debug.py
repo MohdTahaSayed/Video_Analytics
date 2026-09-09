@@ -1,227 +1,298 @@
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
-
-# Allow imports from project root.
+# Add project root to Python path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import cv2
+import numpy as np
+import os
+
 from src.lane.detector import LaneDetector
-from src.lane.geometry import evaluate_polynomial
+
+
+def draw_polynomial(frame, fit, thickness=3):
+
+    if fit is None:
+        return
+
+    h, w = frame.shape[:2]
+
+    ys = np.linspace(
+        int(0.48 * h),
+        h - 1,
+        100
+    )
+
+    xs = np.polyval(
+        fit,
+        ys
+    )
+
+    points = []
+
+    for x, y in zip(xs, ys):
+
+        if 0 <= x < w:
+
+            points.append([
+                int(x),
+                int(y)
+            ])
+
+    if len(points) >= 2:
+
+        points = np.array(
+            points,
+            dtype=np.int32
+        )
+
+        cv2.polylines(
+            frame,
+            [points],
+            False,
+            (0, 255, 0),
+            thickness
+        )
 
 
 def draw_debug(frame, result):
 
     output = frame.copy()
 
-    h, w = frame.shape[:2]
+    h, w = output.shape[:2]
 
-    # ---------------------------------------------------------
+    # =========================================================
     # ROI
-    # ---------------------------------------------------------
+    # =========================================================
 
-    cv2.polylines(
-        output,
-        [result["roi_polygon"]],
-        True,
-        (255, 200, 0),
-        2
+    roi_polygon = result.get(
+        "roi_polygon"
     )
 
-    # ---------------------------------------------------------
-    # Raw Hough lines
-    # ---------------------------------------------------------
-
-    lines = result["hough_lines"]
-
-    if lines is not None:
-
-        # Fix: Ensure consistent shape (N, 4) regardless of OpenCV version
-        lines = np.asarray(lines).reshape(-1, 4)
-
-        for x1, y1, x2, y2 in lines:
-
-            x1 = int(x1)
-            y1 = int(y1)
-            x2 = int(x2)
-            y2 = int(y2)
-
-            cv2.line(
-                output,
-                (x1, y1),
-                (x2, y2),
-                (160, 160, 160),
-                1
-            )
-
-    # ---------------------------------------------------------
-    # Fitted curves
-    # ---------------------------------------------------------
-
-    y_values = np.linspace(
-        int(0.57 * h),
-        int(0.99 * h),
-        100
-    )
-
-    left = result["left"]
-    right = result["right"]
-
-    left_x = evaluate_polynomial(
-        left,
-        y_values
-    )
-
-    right_x = evaluate_polynomial(
-        right,
-        y_values
-    )
-
-    if left_x is not None:
-
-        points = np.column_stack([
-            left_x,
-            y_values
-        ]).astype(np.int32)
+    if roi_polygon is not None:
 
         cv2.polylines(
             output,
-            [points],
-            False,
-            (0, 255, 0),
-            4
+            roi_polygon,
+            True,
+            (255, 255, 0),
+            2
         )
 
-    if right_x is not None:
+    # =========================================================
+    # Lane boundaries
+    # =========================================================
 
-        points = np.column_stack([
-            right_x,
-            y_values
-        ]).astype(np.int32)
-
-        cv2.polylines(
-            output,
-            [points],
-            False,
-            (0, 255, 0),
-            4
-        )
-
-    # ---------------------------------------------------------
-    # Camera / ego center
-    # ---------------------------------------------------------
-
-    ego_x = w / 2
-
-    cv2.line(
-        output,
-        (int(ego_x), int(0.57 * h)),
-        (int(ego_x), h),
-        (255, 0, 0),
-        2
+    left_fit = result.get(
+        "left_fit"
     )
 
-    # ---------------------------------------------------------
+    right_fit = result.get(
+        "right_fit"
+    )
+
+    draw_polynomial(
+        output,
+        left_fit,
+        4
+    )
+
+    draw_polynomial(
+        output,
+        right_fit,
+        4
+    )
+
+    # =========================================================
     # Lane center
-    # ---------------------------------------------------------
+    # =========================================================
 
-    y_ref = int(0.90 * h)
+    lane_center = result.get(
+        "lane_center"
+    )
 
-    if left is not None and right is not None:
+    camera_center = result.get(
+        "camera_center"
+    )
 
-        x_left = float(
-            evaluate_polynomial(
-                left,
-                y_ref
-            )
+    if lane_center is not None:
+
+        y = int(
+            0.90 * h
         )
 
-        x_right = float(
-            evaluate_polynomial(
-                right,
-                y_ref
-            )
+        cv2.circle(
+            output,
+            (
+                int(lane_center),
+                y
+            ),
+            7,
+            (0, 0, 255),
+            -1
         )
 
-        if x_left < x_right:
+        cv2.line(
+            output,
+            (
+                int(lane_center),
+                y
+            ),
+            (
+                int(lane_center),
+                h
+            ),
+            (0, 0, 255),
+            2
+        )
 
-            lane_width = x_right - x_left
+    # Camera center
 
-            if lane_width > 10:
+    if camera_center is not None:
 
-                lane_center = (
-                    x_left + x_right
-                ) / 2
+        cv2.line(
+            output,
+            (
+                int(camera_center),
+                int(0.70 * h)
+            ),
+            (
+                int(camera_center),
+                h
+            ),
+            (255, 0, 0),
+            2
+        )
 
-                ego_position = (
-                    ego_x - x_left
-                ) / lane_width
+    # =========================================================
+    # Information panel
+    # =========================================================
 
-                cv2.circle(
-                    output,
-                    (
-                        int(lane_center),
-                        y_ref
-                    ),
-                    7,
-                    (0, 255, 255),
-                    -1
-                )
+    confidence = result.get(
+        "confidence",
+        0.0
+    )
 
-                cv2.putText(
-                    output,
-                    f"Ego position: {ego_position:.3f}",
-                    (20, 35),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2
-                )
+    valid = result.get(
+        "valid",
+        False
+    )
 
-                cv2.putText(
-                    output,
-                    f"Lane width: {lane_width:.1f}px",
-                    (20, 65),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2
-                )
+    left_valid = result.get(
+        "left_valid",
+        False
+    )
+
+    right_valid = result.get(
+        "right_valid",
+        False
+    )
+
+    offset = result.get(
+        "lateral_offset_pixels"
+    )
+
+    panel = output.copy()
+
+    cv2.rectangle(
+        panel,
+        (10, 10),
+        (330, 155),
+        (0, 0, 0),
+        -1
+    )
+
+    output = cv2.addWeighted(
+        panel,
+        0.65,
+        output,
+        0.35,
+        0
+    )
+
+    cv2.putText(
+        output,
+        f"Confidence: {confidence:.2f}",
+        (20, 38),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2
+    )
+
+    cv2.putText(
+        output,
+        f"Left: {'OK' if left_valid else 'MISS'}",
+        (20, 65),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2
+    )
+
+    cv2.putText(
+        output,
+        f"Right: {'OK' if right_valid else 'MISS'}",
+        (20, 92),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2
+    )
+
+    cv2.putText(
+        output,
+        f"Lane valid: {valid}",
+        (20, 119),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2
+    )
+
+    if offset is not None:
+
+        cv2.putText(
+            output,
+            f"Offset(px): {offset:.1f}",
+            (20, 146),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2
+        )
 
     return output
 
 
 def main():
 
-    input_path = (
-        PROJECT_ROOT
-        / "data"
-        / "input"
-        / "VBOX0011 - Trim.mp4"
+    # Fixed input path - using the correct location
+    input_video = (
+        "data/input/VBOX0011 - Trim.mp4"
     )
 
-    output_path = (
-        PROJECT_ROOT
-        / "data"
-        / "output"
-        / "lane_debug_30s.mp4"
+    # Fixed output path - using data/output directory
+    output_video = (
+        "data/output/debug_m2c.mp4"
     )
 
-    output_path.parent.mkdir(
-        parents=True,
+    # Create output directory if it doesn't exist
+    os.makedirs(
+        "data/output",
         exist_ok=True
     )
 
     cap = cv2.VideoCapture(
-        str(input_path)
+        input_video
     )
 
     if not cap.isOpened():
 
         raise RuntimeError(
-            f"Could not open: {input_path}"
+            f"Could not open video: {input_video}"
         )
 
     fps = cap.get(
@@ -240,25 +311,33 @@ def main():
         )
     )
 
-    print(f"FPS: {fps}")
-    print(f"Resolution: {width}x{height}")
+    print(
+        f"FPS: {fps}"
+    )
+
+    print(
+        f"Resolution: {width}x{height}"
+    )
+
+    detector = LaneDetector(
+        width,
+        height
+    )
+
+    fourcc = cv2.VideoWriter_fourcc(
+        *"mp4v"
+    )
 
     writer = cv2.VideoWriter(
-        str(output_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
+        output_video,
+        fourcc,
         fps,
         (width, height)
     )
 
-    detector = LaneDetector()
+    frame_count = 0
 
-    frame_number = 0
-
-    max_frames = int(
-        fps * 30
-    )
-
-    while frame_number < max_frames:
+    while True:
 
         ret, frame = cap.read()
 
@@ -278,22 +357,29 @@ def main():
             output
         )
 
-        frame_number += 1
+        frame_count += 1
 
-        if frame_number % int(fps * 5) == 0:
+        # Print progress every 250 frames.
+        if frame_count % 250 == 0:
+
+            seconds = (
+                frame_count / fps
+            )
 
             print(
-                f"Processed "
-                f"{frame_number / fps:.1f}s"
+                f"Processed: "
+                f"{seconds:.1f}s"
             )
 
     cap.release()
     writer.release()
 
-    print()
-    print("Finished.")
     print(
-        f"Output: {output_path}"
+        f"\nDone."
+    )
+
+    print(
+        f"Output: {output_video}"
     )
 
 
