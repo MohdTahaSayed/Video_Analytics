@@ -337,7 +337,11 @@ def main():
 
     frame_count = 0
 
-    while True:
+    # Process only the first 60 seconds of video
+    MAX_SECONDS = 60
+    MAX_FRAMES = int(fps * MAX_SECONDS)
+
+    while frame_count < MAX_FRAMES:
 
         ret, frame = cap.read()
 
@@ -368,7 +372,7 @@ def main():
 
             print(
                 f"Processed: "
-                f"{seconds:.1f}s"
+                f"{seconds:.1f}s / {MAX_SECONDS}s"
             )
 
     cap.release()
@@ -376,6 +380,10 @@ def main():
 
     print(
         f"\nDone."
+    )
+
+    print(
+        f"Processed: {frame_count / fps:.1f} seconds"
     )
 
     print(
